@@ -14,6 +14,7 @@ import ApplicationServices
 final class CaretLocator {
     static let pollInterval: TimeInterval = 0.25
     static let messagingTimeout: Float = 0.2
+    static let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox"]
 
     /// 글자 커서가 있는 줄 (Cocoa 화면 좌표). 못 읽으면 nil. 메인 스레드에서만 읽고 쓴다
     private(set) var zone: NSRect?
@@ -87,18 +88,36 @@ final class CaretLocator {
     }
 
     private func caretRect(_ element: AXUIElement) -> CGRect? {
-        guard let rangeRef = copy(element, kAXSelectedTextRangeAttribute),
-              CFGetTypeID(rangeRef) == AXValueGetTypeID() else { return nil }
-        var range = CFRange()
-        guard AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) else { return nil }
-
-        if let rect = bounds(element, range), isPlausible(rect) { return rect }
-        // 길이 0 인 범위에 영역을 주지 않는 앱이 있어, 커서 바로 앞 글자의 영역으로 대신한다
-        if range.length == 0, range.location > 0,
-           let rect = bounds(element, CFRange(location: range.location - 1, length: 1)), isPlausible(rect) {
-            return rect
+        // 방법 1: 선택 범위(글자 번호) → 그 범위의 화면 영역
+        if let rangeRef = copy(element, kAXSelectedTextRangeAttribute),
+           CFGetTypeID(rangeRef) == AXValueGetTypeID() {
+            var range = CFRange()
+            if AXValueGetValue(rangeRef as! AXValue, .cfRange, &range) {
+                if let rect = bounds(element, range), isPlausible(rect) { return rect }
+                // 길이 0 인 범위에 영역을 주지 않는 앱이 있어, 커서 바로 앞 글자의 영역으로 대신한다
+                if range.length == 0, range.location > 0,
+                   let rect = bounds(element, CFRange(location: range.location - 1, length: 1)), isPlausible(rect) {
+                    return rect
+                }
+            }
         }
-        return nil
+        return markerRect(element)
+    }
+
+    /// 방법 2: 글자 표식(text marker) 범위 → 화면 영역.
+    /// Chromium(Electron) 의 여러 줄 입력창은 방법 1 에 빈 사각형(0x0)을 주고 이 경로로만 자리를 준다.
+    /// 글 입력 요소가 아니어도(버튼 등) 근처 입력창의 영역을 돌려주는 일이 있어 입력 요소일 때만 쓴다.
+    private func markerRect(_ element: AXUIElement) -> CGRect? {
+        guard let role = copy(element, kAXRoleAttribute) as? String,
+              CaretLocator.textRoles.contains(role),
+              let markerRange = copy(element, "AXSelectedTextMarkerRange") else { return nil }
+        var ref: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+                element, "AXBoundsForTextMarkerRange" as CFString, markerRange, &ref) == .success,
+              let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(ref as! AXValue, .cgRect, &rect), isPlausible(rect) else { return nil }
+        return rect
     }
 
     private func bounds(_ element: AXUIElement, _ range: CFRange) -> CGRect? {
