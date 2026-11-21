@@ -79,6 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var claudeMonitor: ClaudeMonitor!
     var statusItem: NSStatusItem!
     var randomSpeechTimer: Timer?
+    let caretLocator = CaretLocator()
     var nextColorIndex: Int = 0
     let timeTracker = TimeTracker()
     let updateChecker = UpdateChecker()
@@ -397,6 +398,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let toggles: [(title: String, on: Bool, action: Selector)] = [
             (L10n.menuHoverFade, PetPlacement.hoverFade, #selector(toggleHoverFade)),
+            (L10n.menuCaretFade, PetPlacement.caretFade, #selector(toggleCaretFade)),
             (L10n.menuGather, PetPlacement.gather, #selector(toggleGather)),
         ]
         for toggle in toggles {
@@ -423,6 +425,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildStatusMenu()
     }
 
+    @objc private func toggleCaretFade() {
+        PetPlacement.caretFade.toggle()
+        // 권한 안내 창은 이 기능을 켤 때만 띄운다. 허용하지 않아도 마우스 기준 동작은 그대로다
+        if PetPlacement.caretFade && !CaretLocator.isTrusted {
+            CaretLocator.requestPermission()
+        }
+        updateHoverFade()
+        rebuildStatusMenu()
+    }
+
     @objc private func toggleGather() {
         PetPlacement.gather.toggle()
         updateGatherHomes()
@@ -439,7 +451,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// 커서가 펫(말풍선 포함) 근처에 오면 반투명 + 클릭 통과. ⌥ 를 누르고 있으면 평소처럼 잡힌다.
+    /// "글 쓰는 자리에서 투명해지기"가 켜져 있으면 글자 커서가 있는 줄을 가린 펫도 똑같이 투명해진다.
     private func updateHoverFade() {
+        caretLocator.tick(enabled: PetPlacement.caretFade)
         // 클릭·드래그 도중엔 상태를 바꾸지 않음 (⌥ 드래그 중 손 떼도 끊기지 않게)
         guard NSEvent.pressedMouseButtons == 0 else { return }
         let enabled = PetPlacement.hoverFade
@@ -451,7 +465,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if session.speechBubble.isVisible {
                 zone = zone.union(session.speechBubble.frame)
             }
-            let faded = enabled && !holdingOption && zone.insetBy(dx: -20, dy: -20).contains(mouse)
+            let nearMouse = enabled && zone.insetBy(dx: -20, dy: -20).contains(mouse)
+            let overCaret = caretLocator.zone.map { zone.insetBy(dx: 0, dy: -4).intersects($0) } ?? false
+            let faded = !holdingOption && (nearMouse || overCaret)
             session.petWindow.hoverFaded = faded
             session.speechBubble.hoverFaded = faded
         }
