@@ -14,6 +14,8 @@ import ApplicationServices
 final class CaretLocator {
     static let pollInterval: TimeInterval = 0.25
     static let messagingTimeout: Float = 0.2
+    static let minLineWidth: CGFloat = 120   // 이보다 좁은 요소는 줄로 보지 않고 부모를 찾는다
+    static let maxParentHops = 6
     static let textRoles: Set<String> = ["AXTextArea", "AXTextField", "AXComboBox"]
 
     /// 글자 커서가 있는 줄 (Cocoa 화면 좌표). 못 읽으면 nil. 메인 스레드에서만 읽고 쓴다
@@ -80,11 +82,28 @@ final class CaretLocator {
             return nil
         }
         var line = caret
-        if let frame = elementFrame(focused), frame.width > caret.width,
-           frame.minY <= caret.midY, caret.midY <= frame.maxY {
+        if let frame = lineFrame(focused, caret: caret) {
             line = CGRect(x: frame.minX, y: caret.minY, width: frame.width, height: caret.height)
         }
         return line
+    }
+
+    /// 줄의 가로 범위로 쓸 요소 영역. 초점 요소가 커서만 한 작은 요소면(웹 터미널은 커서를 따라다니는
+    /// 숨은 입력 칸에 초점을 둔다) 커서를 품은 넉넉한 너비의 부모를 몇 단계 위까지 찾아 쓴다.
+    private func lineFrame(_ focused: AXUIElement, caret: CGRect) -> CGRect? {
+        var element = focused
+        for _ in 0...CaretLocator.maxParentHops {
+            if let frame = elementFrame(element), frame.width > caret.width,
+               frame.minY <= caret.midY, caret.midY <= frame.maxY,
+               frame.minX <= caret.midX, caret.midX <= frame.maxX,
+               frame.width >= CaretLocator.minLineWidth {
+                return frame
+            }
+            guard let parentRef = copy(element, kAXParentAttribute),
+                  CFGetTypeID(parentRef) == AXUIElementGetTypeID() else { return nil }
+            element = parentRef as! AXUIElement
+        }
+        return nil
     }
 
     private func caretRect(_ element: AXUIElement) -> CGRect? {
